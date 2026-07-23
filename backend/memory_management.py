@@ -537,7 +537,14 @@ class LoadedModel:
             self._patcher_finalizer.detach()
 
     def is_dead(self):
+        if self.real_model is None:
+            # not loaded yet, or already unloaded; nothing to be dead about
+            return False
         return self.real_model() is not None and self.model is None
+
+    def is_stale(self):
+        """Whether this entry no longer belongs in `current_loaded_models`"""
+        return self.real_model is None or self.real_model() is None
 
 
 def use_more_memory(extra_memory, loaded_models, device):
@@ -601,24 +608,39 @@ def free_memory(memory_required: float, device: torch.device, keep_loaded: list[
     for i in range(len(current_loaded_models) - 1, -1, -1):
         shift_model = current_loaded_models[i]
         if shift_model.device == device:
-            if shift_model not in keep_loaded and not shift_model.is_dead():
-                can_unload.append((-shift_model.model_offloaded_memory(), sys.getrefcount(shift_model.model), shift_model.model_memory(), i))
+            # hold a strong reference; the patcher can be collected at any point
+            patcher = shift_model.model
+            if patcher is not None and shift_model not in keep_loaded and not shift_model.is_dead():
+                can_unload.append((-shift_model.model_offloaded_memory(), sys.getrefcount(patcher), shift_model.model_memory(), i, shift_model))
                 shift_model.currently_used = False
 
-    for x in sorted(can_unload):
-        i = x[-1]
-        memory_to_free = None
-        if not DISABLE_SMART_MEMORY:
-            free_mem = get_free_memory(device)
-            if free_mem > memory_required:
-                break
-            memory_to_free = memory_required - free_mem
-        logger.debug(f"Unloading {current_loaded_models[i].model.model.__class__.__name__}")
-        if current_loaded_models[i].model_unload(memory_to_free):
-            unloaded_model.append(i)
-
-    for i in sorted(unloaded_model, reverse=True):
-        unloaded_models.append(current_loaded_models.pop(i))
+    try:
+        for x in sorted(can_unload):
+            shift_model: "LoadedModel" = x[-1]
+            memory_to_free = None
+            if not DISABLE_SMART_MEMORY:
+                free_mem = get_free_memory(device)
+                if free_mem > memory_required:
+                    break
+                memory_to_free = memory_required - free_mem
+            patcher = shift_model.model
+            if patcher is None:
+                # collected since the loop above; cleanup_models() will drop it
+                continue
+            logger.debug(f"Unloading {patcher.model.__class__.__name__}")
+            if shift_model.model_unload(memory_to_free):
+                unloaded_model.append(shift_model)
+    finally:
+        # must run even when unloading raises, otherwise already-unloaded entries
+        # are left in current_loaded_models and break every later pass
+        for shift_model in unloaded_model:
+            # by identity: model_unload() can re-enter cleanup_models() through a
+            # finalizer and shift the indices, and __eq__ compares the (now None)
+            # patchers, which would match the wrong entry
+            for i in range(len(current_loaded_models) - 1, -1, -1):
+                if current_loaded_models[i] is shift_model:
+                    unloaded_models.append(current_loaded_models.pop(i))
+                    break
 
     if len(unloaded_model) > 0:
         soft_empty_cache()
@@ -739,6 +761,11 @@ def cleanup_models_gc(*, target: list["ModelPatcher"] = []):
 
     for i in range(len(current_loaded_models)):
         cur = current_loaded_models[i]
+        if cur.is_stale():
+            # already unloaded, or the model was collected without a finalizer run;
+            # keeping it around would poison every later pass
+            _del.append(i)
+            continue
         if not cur.is_dead():
             continue
         if any(mdl.model is cur.real_model() for mdl in target):
@@ -766,7 +793,9 @@ def cleanup_models_gc(*, target: list["ModelPatcher"] = []):
 def cleanup_models():
     to_delete = []
     for i in range(len(current_loaded_models)):
-        if current_loaded_models[i].real_model() is None:
+        # called from a weakref finalizer; raising here is silently swallowed
+        # and the cleanup never happens, so never dereference blindly
+        if current_loaded_models[i].is_stale():
             to_delete = [i] + to_delete
 
     for i in to_delete:
