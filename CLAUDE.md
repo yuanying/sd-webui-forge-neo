@@ -50,6 +50,33 @@ git rebase origin/neo
 `./webui.sh` ではなく **`./webui-user.sh`** を使う。前者を直接叩くと
 `COMMANDLINE_ARGS` が渡らず、モデルパスなどの設定がすべて落ちる。
 
+サーバーは Claude のバックグラウンドタスクではなく、**herdr の `sd-webui`
+という名前の Pane で動かす**。ユーザーがログを直接見られる場所に置き、
+セッションをまたいで生き残らせるため。
+
+### 手順
+
+前提として `HERDR_ENV=1` であること。そうでなければ herdr の外にいるので
+操作しない。
+
+1. 既存の Pane を探す。`herdr pane list --workspace "$HERDR_WORKSPACE_ID"`
+   の結果から `label` が `sd-webui` のものを拾う。
+2. 無ければ用意する。同じタブに未使用のシェル Pane（`revision` が 0 で
+   エージェントが乗っていないもの）があればそれを使い、無ければ
+   `herdr pane split --current --direction down --cwd "$PWD" --no-focus`
+   で作る。いずれの場合も `herdr pane rename <pane_id> sd-webui` で命名する。
+3. `herdr pane run <pane_id> './webui-user.sh'` で起動する。
+4. `herdr pane wait-output <pane_id> --regex "Running on local URL|Traceback|error:|Killed"`
+   で起動完了を待つ。成功時の目印は `Running on local URL:  http://[::]:7860`。
+
+### 停止と再起動
+
+Pane 内のフォアグラウンドプロセスなので `herdr pane send-keys <pane_id> ctrl+c`
+で止める。再起動は手順3から。ポートが空いたことは `ss -ltn | grep 7860` で
+確認できる。
+
+Pane を作り直す必要はない。`sd-webui` Pane は使い回す。
+
 ## 環境ファイル
 
 `.tool-versions` は追跡しない。コミット対象に含めないこと。
