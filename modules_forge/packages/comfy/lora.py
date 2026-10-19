@@ -259,6 +259,18 @@ def model_lora_keys_unet(model, key_map={}):
                 key_lora = k[len("diffusion_model.") : -len(".weight")]
                 key_map["transformer.{}".format(key_lora)] = k
 
+    if "moss-image" in _model_name:
+        dim = model.diffusion_model.config.get("dim", 0)
+        for k in sdk:
+            if k.startswith("diffusion_model.layers.") and k.endswith(".proj.qkv.weight"):  # fused qkv checkpoint; LoRAs address q/k/v separately
+                key_lora = k[len("diffusion_model.") : -len(".qkv.weight")]
+                for i, name in enumerate(("q", "k", "v")):
+                    to = (k, (0, dim * i, dim))
+                    key_map["lora_unet_{}_{}".format(key_lora.replace(".", "_"), name)] = to  # sd-scripts
+                    key_map["diffusion_model.{}.{}".format(key_lora, name)] = to
+                    key_map["transformer.{}.{}".format(key_lora, name)] = to
+                    key_map["{}.{}".format(key_lora, name)] = to
+
     if "krea-2" in _model_name:
         diffusers_keys = krea2_to_diffusers(model.diffusion_model.config, output_prefix="diffusion_model.")
         for k in diffusers_keys:
