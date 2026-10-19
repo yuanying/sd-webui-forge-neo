@@ -6,7 +6,9 @@ from backend.diffusion_engine.base import ForgeDiffusionEngine, ForgeObjects
 from backend.patcher.clip import CLIP
 from backend.patcher.unet import UnetPatcher
 from backend.patcher.vae import VAE
+from backend.sampling.skip_layer_guidance import parse_layers, skip_uncond_layers
 from backend.text_processing.moss_image_engine import Qwen359BEngine
+from modules.shared import opts
 
 
 class MOSSImage(ForgeDiffusionEngine):
@@ -22,6 +24,7 @@ class MOSSImage(ForgeDiffusionEngine):
         k_predictor = self._get_predictor()
 
         unet = UnetPatcher.from_model(model=huggingface_components["transformer"], diffusers_scheduler=None, k_predictor=k_predictor, config=estimated_config)
+        unet.add_conditioning_modifier(skip_uncond_layers(lambda: parse_layers(opts.moss_uncond_skip_layers)))
 
         self.text_processing_engine_qwen = Qwen359BEngine(
             text_encoder=clip.cond_stage_model.qwen35_9b,

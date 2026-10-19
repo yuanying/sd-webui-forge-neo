@@ -250,6 +250,8 @@ options_templates.update(
                 gr.Textbox,
                 {"lines": 3, "max_lines": 6, "placeholder": "<Prompt Start>"},
             ),
+            "divmoss": OptionDiv(),
+            "moss_uncond_skip_layers": OptionInfo("22", "[MOSS-Image] Skip Layers in the Negative Branch").info("comma-separated layer indices ; empty = disable ; officially recommended: 22"),
             "divmisc": OptionDiv(),
             "qwen_vae_resize": OptionInfo(False, "[Qwen-Image-Edit] Resize input image to 1 megapixel for ref_latent"),
             "klein_do_reference": OptionInfo(True, "[Klein] Enable Reference").info("enable Edit ; disable img2img").info("pin to <b>Quicksettings</b> is recommended if changed often"),
